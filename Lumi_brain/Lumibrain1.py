@@ -1,212 +1,80 @@
-import threading, queue, time, serial, cv2, random
-from faster_whisper import WhisperModel
-from openai import OpenAI
+import speech_recognition as sr
+import time
+import time
+# Бусад модулиудаа оруулж ирэх
+from logic import oyu_intelligence
+from stt_engine import start_stt_engine, add_audio_to_queue
+from vision import start_vision_engine, get_current_person
+from nav_planner import send_navigation_command
 
-# --- HARDWARE & API CONFIG ---
-# Use Gemini 1.5 Flash for the fastest "Thinking" time
-MODEL_ID = "google/gemini-1.5-flash" 
-OPENROUTER_KEY = "your_key_here"
-client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=OPENROUTER_KEY)
+# --- МИКРОФОНЫ ТОХИРГОО (Microphone Setup) ---
+recognizer = sr.Recognizer()
+recognizer.dynamic_energy_threshold = True
+recognizer.pause_threshold = 0.5  # 0.5 секунд дуугүй болоход шууд бичлэгийг зогсооно (Хурдыг нэмэгдүүлнэ)
 
-# --- FAST STT ENGINE ---
-# 'base' or 'small' models are perfect for laptop speed
-stt_model = WhisperModel("base", device="cpu", compute_type="int8")
-audio_queue = queue.Queue()
-
-def stt_worker():
-    """Processes audio in the background so the main loop never freezes."""
-    while True:
-        audio_path = audio_queue.get()
-        if audio_path is None: break
+def listen_and_save():
+    """
+    Микрофоноос дуу бичиж аваад 'input.wav' файл болгон хадгална.
+    """
+    # Хэрэв танд олон микрофон байгаад бурууг нь сонсоод байвал sr.Microphone(device_index=2) гэж сольж болно
+    with sr.Microphone() as source: 
+        print("\n[🎙️] Оюу сонсож байна...")
         
-        segments, _ = stt_model.transcribe(audio_path, beam_size=1)
-        text = "".join([s.text for s in segments])
+        # Орчны чимээг маш хурдан (0.2s) шалгаж шүүх
+        recognizer.adjust_for_ambient_noise(source, duration=0.2) 
         
-        if text.strip():
-            # Send text to the Brain logic immediately
-            handle_ai_logic(text)
-        audio_queue.task_done()
-
-threading.Thread(target=stt_worker, daemon=True).start()
-
-current_detected_person = "Unknown"
-
-def vision_background_loop():
-    """Constantly updates who Oyu sees without stopping the conversation."""
-    global current_detected_human
-    while True:
-        # Uses your existing face recognition logic
-        person = check_who_is_here() 
-        if person != "none":
-            current_detected_human = person
-        time.sleep(1.0) # Check every second
-
-threading.Thread(target=vision_background_loop, daemon=True).start()
-
-def handle_ai_logic(user_input):
-    """Processes input and triggers movement BEFORE speech to save time."""
-    print(f"User said: {user_input}")
+        try:
+            # timeout=3: 3 секунд хэн ч юу ч хэлэхгүй бол зогсоно
+            # phrase_time_limit=10: Нэг өгүүлбэр дээд тал нь 10 секунд байна
+            audio = recognizer.listen(source, timeout=3, phrase_time_limit=10)
+            
+            # Үргэлж нэг ижил нэртэй файл дээр дарж бичнэ (Хатуу диск дүүрэхээс сэргийлнэ)
+            file_name = "input.wav"
+            with open(file_name, "wb") as f:
+                f.write(audio.get_wav_data())
+                
+            print("[✅] Дуу хүлээж авлаа. Дараалал руу шилжүүлэв.")
+            return file_name
+            
+        except sr.WaitTimeoutError:
+            # Чимээгүй байвал ямар нэг алдаа заахгүйгээр буцаах
+            return None
+        except Exception as e:
+            print(f"[Микрофон алдаа]: {e}")
+            return None
+        
+def speak(text):
+    """Энд өөрийн SonurTTS эсвэл өөр TTS кодоо дуудна.
+    Цэвэрлэх: ACTION тагуудыг устгаад зөвхөн ярих текстийг үлдээнэ."""
+    import re
+    clean_text = re.sub(r'\[ACTION.*?\]', '', text).strip()
+    print(f"\n[Оюу]: {clean_text}\n")
     
-    # 1. Ask Gemini (Thinking phase)
-    # The system prompt should now include [ACTION:NAVIGATE:SECTION_NAME]
-    fixed_text, ai_response = oyu_intelligence(user_input)
-    
-    # 2. IMMEDIATE NAVIGATION TRIGGER
-    # If the AI decides to move, tell the OpenCR now!
-    if "[ACTION:NAVIGATE:" in ai_response:
-        location = ai_response.split(":")[-1].replace("]", "")
-        if ser:
-            # OpenCR handles the PID movement locally
-            ser.write(f"NAV_TO:{location}\n".encode()) 
-            print(f"ROBOT STARTING NAVIGATION TO: {location}")
-    
-    # 3. SPEECH (Happens while robot starts moving)
+def ai_callback(transcribed_text):
+    """STT хөдөлгүүр аудиог текст болгож дуусмагц энэ функц автоматаар ажиллана."""
+    print(f"[Та]: {transcribed_text}")
+    # 1. Тархи руу илгээж бодуулах
+    _, ai_response = oyu_intelligence(transcribed_text)
+    # 2. Хэрэв хөдлөх шаардлагатай бол моторт тушаал өгөх (Ярьж эхлэхээс өмнө)
+    send_navigation_command(ai_response)
+    # 3. Хариулах (Хөдөлж байхдаа ярина)
     speak(ai_response)
 
-    # Add this to your existing system prompt
-"""
-Чи бол номын сангийн хөтөч робот. 
-1. Хэрэглэгч 'А хэсэг рүү явъя' эсвэл 'Ном хаана байна?' гэвэл 
-   ШУУД [ACTION:NAVIGATE:SECTION_NAME] гэж хариул.
-2. Яриа болон хөдөлгөөн зэрэг явагдах тул товч хариул.
-"""
-def oyu_intelligence(raw_stt_input, emotion_eng="HAPPY", emotion_mn="баяртай"):
-    """
-    AI-д номын сангийн мэдээллийг өгч, навигацийн үйлдэл (ACTION) хийхийг зааварлана.
-    """
-    global chat_history, current_user_name
-    
-    # --- НОМЫН САНГИЙН ТУСГАЙ ЗААВАРЧИЛГАА ---
-    library_context = (
-        "Чи бол номын сангийн хөтөч робот Оюу. "
-        "Номын сангийн бүтэц: \n"
-        "- А хэсэг: Цахилгаан техник, Автоматжуулалт\n"
-        "- Б хэсэг: Мэдээллийн технологи, Програмчлал\n"
-        "- В хэсэг: Уншлагын танхим, Амралтын хэсэг\n"
-        "Хэрэглэгч эдгээр хэсгүүдийг асуувал хариулт дотроо заавал [ACTION:NAVIGATE:SECTION_NAME] гэж бич. "
-        "Жишээ нь: 'Ойлголоо, А хэсэг рүү явъя. [ACTION:NAVIGATE:SECTION_A]'"
-    )
-
-    system_prompt = (
-        library_context +
-        "\nМӨРДӨХ ЖУРАМ:\n"
-        "1. Хариулт маш товч (1-2 өгүүлбэр). Заавал Монголоор.\n"
-        "2. Хэрэглэгч ямар нэг хэсэг рүү явахыг хүсвэл ACTION-ыг заавал ашигла.\n"
-        "3. Яриандаа англи үсэг огт бүү ашигла (ACTION-аас бусад хэсэгт)."
-    )
-
-    messages = [{"role": "system", "content": system_prompt}] + chat_history[-5:] + [{"role": "user", "content": raw_stt_input}]
-
-    try:
-        response = client.chat.completions.create(model=MODEL_ID, messages=messages, temperature=0.3)
-        reply = response.choices[0].message.content
-        
-        # Санах ойд хадгалах
-        chat_history.append({"role": "user", "content": raw_stt_input})
-        chat_history.append({"role": "assistant", "content": reply})
-        return raw_stt_input, reply
-    except Exception as e:
-        return raw_stt_input, f"Алдаа: {e}"
-    
-def oyu_intelligence(raw_stt_input, emotion_eng="HAPPY", emotion_mn="баяртай"):
-    """
-    AI-д номын сангийн мэдээллийг өгч, навигацийн үйлдэл (ACTION) хийхийг зааварлана.
-    """
-    global chat_history, current_user_name
-    
-    # --- НОМЫН САНГИЙН ТУСГАЙ ЗААВАРЧИЛГАА ---
-    library_context = (
-        "Чи бол номын сангийн хөтөч робот Оюу. "
-        "Номын сангийн бүтэц: \n"
-        "- А хэсэг: Цахилгаан техник, Автоматжуулалт\n"
-        "- Б хэсэг: Мэдээллийн технологи, Програмчлал\n"
-        "- В хэсэг: Уншлагын танхим, Амралтын хэсэг\n"
-        "Хэрэглэгч эдгээр хэсгүүдийг асуувал хариулт дотроо заавал [ACTION:NAVIGATE:SECTION_NAME] гэж бич. "
-        "Жишээ нь: 'Ойлголоо, А хэсэг рүү явъя. [ACTION:NAVIGATE:SECTION_A]'"
-    )
-
-    system_prompt = (
-        library_context +
-        "\nМӨРДӨХ ЖУРАМ:\n"
-        "1. Хариулт маш товч (1-2 өгүүлбэр). Заавал Монголоор.\n"
-        "2. Хэрэглэгч ямар нэг хэсэг рүү явахыг хүсвэл ACTION-ыг заавал ашигла.\n"
-        "3. Яриандаа англи үсэг огт бүү ашигла (ACTION-аас бусад хэсэгт)."
-    )
-
-    messages = [{"role": "system", "content": system_prompt}] + chat_history[-5:] + [{"role": "user", "content": raw_stt_input}]
-
-    try:
-        response = client.chat.completions.create(model=MODEL_ID, messages=messages, temperature=0.3)
-        reply = response.choices[0].message.content
-        
-        # Санах ойд хадгалах
-        chat_history.append({"role": "user", "content": raw_stt_input})
-        chat_history.append({"role": "assistant", "content": reply})
-        return raw_stt_input, reply
-    except Exception as e:
-        return raw_stt_input, f"Алдаа: {e}"
-    
-    #include <DynamixelSDK.h>
-
-// --- ТОХИРГОО ---
-#define BAUDRATE      1000000
-#define DEVICENAME    "" // OpenCR-д хоосон үлдээж болно
-#define ID_LEFT       1
-#define ID_RIGHT      2
-
-// PID параметрүүд (Таны "Guess and See" аргаар олсон утгууд)
-float Kp = 0.4, Ki = 0.01, Kd = 0.1;
-float target_velocity = 0;
-float current_velocity = 0;
-
-void setup() {
-  Serial.begin(115200); // Jetson Nano-той харилцах UART
-  
-  // Dynamixel бэлтгэх
-  if (init_motors()) {
-    Serial.println("Motors Initialized!");
-    torque_on(ID_LEFT);
-    torque_on(ID_RIGHT);
-  }
-}
-
-void loop() {
-  // 1. Jetson Nano-оос ирэх тушаалыг унших
-  if (Serial.available() > 0) {
-    String command = Serial.readStringUntil('\n');
-    
-    if (command.startsWith("NAV_TO:")) {
-      String location = command.substring(7);
-      handle_navigation(location);
-    }
-    else if (command == "STOP_ALL") {
-      stop_motors();
-    }
-  }
-  
-  // 2. PID тооцоолол болон моторын хурдыг барих
-  update_pid_control();
-  delay(10);
-}
-
-void handle_navigation(String location) {
-  // Номын сангийн хэсгүүдийн логик
-  if (location == "SECTION_A") {
-    Serial.println("Navigating to Engineering Section...");
-    move_robot(150, 0); // (Хурд, Өнцөг)
-  } 
-  else if (location == "SECTION_B") {
-    move_robot(150, 45); 
-  }
-}
-
-void move_robot(int velocity, int angle) {
-  // Кинематик тооцоолол: Хурд болон өнцгийг моторын хурд руу шилжүүлэх
-  target_velocity = velocity;
-  // Энд дугуй бүрийн хурдыг тооцоолж моторууд руу илгээнэ
-}
-
-void update_pid_control() {
-  // Моторын одоогийн хурдыг уншиж PID-ээр засах
-  // Энэ нь роботыг жигд хөдөлгөхөд тусална
-}
+if __name__ == "__main__":
+    print("=== Lumi Core Subsystems Эхэлж байна ===")
+    # 1. Далд процессуудыг асаах (Нүд болон Чих)
+    start_vision_engine()
+    start_stt_engine(ai_callback) # STT-д өөрийн callback функцийг өгнө
+    print("=== Оюу ажиллахад бэлэн боллоо ===")
+    # 2. Үндсэн гогцоо (Микрофон байнга сонсож байх хэсэг)
+    while True:
+        try:
+            # Микрофоныг асааж сонсох
+            audio_file = listen_and_save()
+            # Хэрэв дуу амжилттай бичигдсэн бол STT хөдөлгүүр рүү илгээх
+            if audio_file:
+                add_audio_to_queue(audio_file)
+            time.sleep(0.1) # Системийг хэт ачааллахаас сэргийлнэ
+        except KeyboardInterrupt:
+            print("\nПрограмм зогслоо.")
+            break
