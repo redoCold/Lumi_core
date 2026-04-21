@@ -2,7 +2,7 @@ from openai import OpenAI
 
 # --- API ТОХИРГОО (API Configuration) ---
 MODEL_ID = "google/gemini-1.5-flash" 
-OPENROUTER_KEY = "your_key_here" # Өөрийн OpenRouter түлхүүрээ энд оруулна уу
+OPENROUTER_KEY = "AIzaSyAR1hR_CwJrfsSXHv9zA6fGm0V49kjEtEE" # Өөрийн OpenRouter түлхүүрээ энд оруулна уу
 client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=OPENROUTER_KEY)
 
 # --- САНАХ ОЙ (State Management) ---
@@ -41,7 +41,6 @@ def oyu_intelligence(raw_stt_input, emotion_eng="HAPPY", emotion_mn="баярт�
     messages = [{"role": "system", "content": system_prompt}] + chat_history[-5:] + [{"role": "user", "content": raw_stt_input}]
 
     try:
-        # Gemini 1.5 Flash рүү хүсэлт илгээх
         response = client.chat.completions.create(
             model=MODEL_ID, 
             messages=messages, 

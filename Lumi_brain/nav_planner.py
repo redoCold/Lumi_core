@@ -1,9 +1,8 @@
 import serial
 import time
 
-# --- ЦУВАА ХОЛБООНЫ ТОХИРГОО (Serial Config) ---
+# --- ЦУВАА ХОЛБООНЫ ТОХИРГОО---
 # Jetson Nano дээрх UART портыг зааж өгнө (Жишээ нь: /dev/ttyTHS1 эсвэл /dev/ttyUSB0)
-# Лаптоп дээр бол 'COM3' гэх мэт байна
 SERIAL_PORT = "/dev/ttyS1" 
 BAUD_RATE = 115200
 
