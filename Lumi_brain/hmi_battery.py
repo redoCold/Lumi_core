@@ -1,13 +1,13 @@
 import tkinter as tk
 import psutil  
-
+import os
+os.environ["DISPLAY"] = ":0"
 class RobotFace:
     def __init__(self, root):
         self.root = root
         self.root.title("HMI")
-
         self.root.attributes('-fullscreen', True)
-        self.root.configure(bg='black')
+        self.root.bind("<F11>", lambda event: self.root.attributes("-fullscreen", not self.root.attributes("-fullscreen")))
         
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
@@ -25,9 +25,13 @@ class RobotFace:
                                      outline="white", width=3, tags="battery")
         self.canvas.create_rectangle(x_start + 80, y_start + 10, x_start + 88, y_start + 30, 
                                      fill="white", tags="battery")
-        color = "green"
-        if percentage < 50: color = "yellow"
-        elif percentage<20: color = "red" 
+        if percentage < 20: 
+            color = "red" 
+        elif percentage < 50: 
+            color = "yellow"
+        else: 
+            color = "green"
+
         fill_width = (percentage / 100) * 74
         self.canvas.create_rectangle(x_start + 3, y_start + 3, x_start + 3 + fill_width, y_start + 37, 
                                      fill=color, tags="battery")
@@ -40,9 +44,11 @@ class RobotFace:
             percent = int(battery.percent) if battery else 100
         except:
             percent = 99
-            print("fk")
+            print("Battery read error")
+            
         self.draw_battery(percent)
         self.root.after(5000, self.up_loop)
+
 if __name__ == "__main__":
     root = tk.Tk()
     face = RobotFace(root)
